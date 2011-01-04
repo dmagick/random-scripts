@@ -1,0 +1,76 @@
+#!/usr/bin/ruby
+
+require 'yaml'
+
+if ARGV[0].nil? or ARGV[0].empty?
+	puts "Need to specify a domain to test."
+	exit -1
+end
+
+domain=ARGV[0].strip
+
+base_report_dir="/var/lib/puppet/reports"
+report_dir=base_report_dir + "/" + domain
+
+unless File.directory?(base_report_dir)
+    puts "Unable to open puppet report directory (permissions problems?)"
+    exit -1
+end
+
+unless File.directory?(report_dir)
+	puts "That domain doesn't have a report or it can't be opened (permissions problems?)"
+	exit -1
+end
+
+files=Dir.glob(report_dir + "/*.yaml")
+all_files = files.sort
+
+if all_files.empty?
+	exit 0
+end
+
+nagios_message=''
+
+latest_file = all_files.slice!(-1)
+
+log = File.open(latest_file)
+yp = YAML::parse_documents( log ) { |tree|
+	  at = tree.select('/metrics/resources/values')[0]
+	  x = at.transform
+	  failed = x.rassoc("Failed")[2]
+	  if failed == 1
+		  print "There is 1 puppet module failing. "
+	  else
+		  print "There are " , failed , " puppet modules failing. "
+		  if failed == 0:
+			  print "\n"
+		  end
+	  end
+
+	  if failed > 0:
+		  log_tree = tree.select('/logs')[0]
+		  logs = log_tree.transform
+		  logs.each { | logmsg |
+				loglevel = logmsg.ivars["level"]
+				if loglevel.id2name != "err":
+					next
+				end
+
+				source = logmsg.ivars["source"]
+				if source == "Puppet":
+					next
+				end
+				msg = logmsg.ivars["message"]
+				if nagios_message == "":
+					nagios_message = msg
+				else
+					nagios_message = nagios_message + ", " + msg
+				end
+		  }
+		  print nagios_message + "\n"
+		  exit 1
+	  end
+}
+
+exit 0
+

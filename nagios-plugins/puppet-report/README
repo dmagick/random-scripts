@@ -1,0 +1,58 @@
+check_puppet_report is a custom (ruby) plugin to parse and process the yaml status reports that puppet produces. Puppet clients send a report back to the puppet master, so they are only stored on your puppet master server and it will tell you if there are any failures in any puppet modules on a particular host. This is different to the  puppet_check  nagios check, which only checks that puppet is *working* (has tried an update recently) on a particular host.
+
+For this to work, your puppet clients must enable reporting. Add
+report = true
+
+to your puppet.conf file.
+
+
+Nagios (in your network) then runs a service to check your puppet master for this report.
+
+This also requires a firewall modification on your puppet master to allow servers/offices to connect to it's nagios service.
+
+There is an extra nrpe command in /etc/nagios/nrpe_local.cfg on puppet master:
+
+# cat /etc/nagios/nrpe_local.cfg 
+command[puppet_report]=/usr/lib/nagios/plugins/check_puppet_report $ARG1$
+
+Also (just on puppet master) the nagios user is in the puppet group so it can read the reports:
+
+In debian:
+
+# usermod -a -G puppet nagios
+# id nagios
+uid=111(nagios) gid=110(nagios) groups=110(nagios),111(puppet)
+
+On centos there is a different user - 'nrpe':
+
+# usermod -a -G puppet nrpe
+# id nrpe
+uid=100(nrpe) gid=101(nrpe) groups=101(nrpe),52(puppet)
+
+After adding the nagios user to the puppet group, restart nrpe otherwise the changes won't get picked up.
+
+There is a cron job to clean up anything older than 30 minutes:
+
+# cat /etc/cron.d/puppet-report-cleanup
+# clean up puppet reports older than 30 minutes.
+*/30 * * * * root find /var/lib/puppet/reports -mindepth 1 -type f -mmin +30 | xargs rm -f
+
+Add your host to the 'puppet-report' service in conf.d/services.cfg  on your Nagios server:
+
+# this makes sure that puppet has no failures.
+define service {
+        name puppet-report
+        description puppet-report
+        use generic-service
+        name puppet-report-service
+        check_command puppet-report
+        hosts your_host_here
+}
+
+
+Testing
+
+From the server you want to test (ie *not* ops):
+
+# /usr/lib/nagios/plugins/check_nrpe -H puppetmaster -c puppet_report -a my.full.server.name
+

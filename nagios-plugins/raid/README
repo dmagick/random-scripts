@@ -1,0 +1,52 @@
+The script will return critical if the raid is broken (disk missing) or using a spare disk. It will return a warning if it's rebuilding/resyncing.
+
+Anything else apart from "OK" should return 'unknown' and the script should be updated to handle that situation.
+
+Currently it supports
+
+    * hp
+    * dell
+    * 3ware (at least for degraded/rebuilding arrays)
+    * mdadm 
+
+It uses the proprietary binaries from hp/dell/3ware to do the work. If they aren't installed, you can't check the raid status.
+
+If you are checking a 3ware controller, the 3ware utils require root access. However nagios runs as nrpe (centos) or nagios (debian) so you need to set up sudo access:
+
+nrpe    ALL = NOPASSWD: /usr/local/sbin/tw_cli
+
+and disable 'disable requiretty':
+
+Defaults    requiretty
+Defaults:nrpe !requiretty
+
+Then test it:
+
+# sudo -u nrpe sudo /usr/local/sbin/tw_cli /c0 show
+
+In your nrpe config (for centos/rhel this will need adjusting based on the architecture since they get installed to different locations):
+
+64 bit
+command[check_raid]=/usr/lib64/nagios/plugins/check_raid.pl
+
+or 32 bit
+command[check_raid]=/usr/lib/nagios/plugins/check_raid.pl
+
+Your nagios commands.cfg :
+
+define command{
+     command_name    check-raid
+     command_line       /usr/lib/nagios/plugins/check_nrpe -H $HOSTADDRESS$ -t 30 -c check_raid
+}
+
+and of course your  services.cfg :
+
+define service {
+    name check-raid
+    description check-raid
+    use workhours-service
+    check_command check-raid
+    hosts a, b, c
+}
+
+There are no warnings or thresholds to pass through.
