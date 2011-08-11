@@ -52,7 +52,7 @@ define service {
 
 Testing
 
-From the server you want to test (ie *not* ops):
+From the server you want to test (ie *not* puppetmaster):
 
 # /usr/lib/nagios/plugins/check_nrpe -H puppetmaster -c puppet_report -a my.full.server.name
 
