@@ -6,17 +6,13 @@
 # - hp
 # - dell
 # - mdstat
-# - threeware
+# See https://opswiki.squiz.net/Infrastructure/Proprietary_RAID_Device_Management_%28Dell_HP_3ware%29/Output_for_monitoring
+# for the output that it handles.
 #
 # From there it should look at the specific controller to work out
 # what's going on.
 # After all that, return the right code(s) for nagios to deal with.
-#
-# The threeware util *requires* being run as root, it will not run any other way.
-# So you'll need a sudo line to deal with that for whoever runs nagios
-# (either nrpe or nagios depending on the o/s).
-# The other utils are not so picky.
-#
+
 # general idea is
 # degraded == critical, rebuilding == warning
 # using a spare == critical
@@ -58,48 +54,108 @@ package hp;
 
     sub getInfo {
         my( $self ) = @_;
-        my @output = `$self->{_path} controller slot=0 physicaldrive all show`;
-        my ($raidArray, $driveBay, $driveStatus);
-
         my $status = 0;
         my $statusMsg = '';
-        foreach (@output) {
-            my $line = $self->SUPER::trim($_);
-            if ($line =~ /^$/) {
-                next;
-            }
+		my @output = `sudo $self->{_path} controller all show status`;
+		if ( $? ne 0 ) {
+			return (3, "Unable to run command ".$self->{_path}." to get controller information: ".$!);
+		}
 
-            if ($line =~ /^array (.*)/) {
-                $raidArray = $1;
-                next;
-            }
+		my (%controllers);
+		my ($controllerType, $controllerId);
+		foreach (@output) {
+				my $line = $self->SUPER::trim($_);
+				if ($line =~ /^$/) {
+					next;
+				}
+				if ($line =~ /Smart Array (.*?) in Slot (\d+)/) {
+					$controllerType = $1;
+					$controllerId   = $2;
+					$controllers{$controllerId} = $controllerType;
+					next;
+				}
+				if ($line =~ /Controller Status: (.*)/) {
+					if ($1 !~ /OK/) {
+						$status = 1;
+						$statusMsg = $statusMsg . "Controller $controllerType (id $controllerId) has status of $1.";
+					}
+					next;
+				}
 
-            if ($line =~ /^physicaldrive/) {
-                my @chunk = split(':', $line);
-                my @driveinfo = split(',', $chunk[-1]);
-                $driveBay = $driveinfo[0];
-                $driveStatus = lc($driveinfo[-1]);
-                $driveBay =~ s/bay //;
-                $driveStatus =~ s/\)//;
+				if ($line =~ /Battery.*? Status: (.*)/) {
+					if ($1 !~ /OK/) {
+						$status = 1;
+						$statusMsg = $statusMsg . "Controller $controllerType (id $controllerId) battery has a status of $1.";
+					}
+					next;
+				}
+		}
 
-                if ($driveStatus =~ /ok/) {
-                    next;
-                }
+		while (($controllerId, $controllerType) = each(%controllers)) {
+			@output = `sudo $self->{_path} controller slot=$controllerId physicaldrive all show`;
+			my ($raidArray, $driveBay, $driveStatus, $ldId, $ldStatus);
 
-                # only set status to '1' if it's currently ok
-                if ($status eq 0) {
-                    $status = 1;
-                }
+			foreach (@output) {
+				my $line = $self->SUPER::trim($_);
+				if ($line =~ /^$/) {
+					next;
+				}
 
-                # set it to 2 regardless of whether it's currently 2 or 1
-                # it's bad either way.
-                if ($driveStatus =~ /spare/ or $driveStatus =~ /active spare/) {
-                    $status = 2;
-                }
+				if ($line =~ /^array (.*)/) {
+					$raidArray = $1;
+					next;
+				}
 
-                $statusMsg = $statusMsg . "Array $raidArray drive in bay $driveBay has status $driveStatus.";
-            }
-        }
+				if ($line =~ /^physicaldrive/) {
+					my @chunk = split(':', $line);
+					my @driveinfo = split(',', $chunk[-1]);
+					$driveBay = $driveinfo[0];
+					$driveStatus = lc($driveinfo[-1]);
+					$driveBay =~ s/bay //;
+					$driveStatus =~ s/\)//;
+
+					if ($driveStatus =~ /ok/) {
+						next;
+					}
+
+					# only set status to '1' if it's currently ok
+					if ($status eq 0) {
+						$status = 1;
+					}
+
+					# set it to 2 regardless of whether it's currently 2 or 1
+					# it's bad either way.
+					if ($driveStatus =~ /spare/ or $driveStatus =~ /active spare/ or $driveStatus =~ /predictive failure/) {
+						$status = 2;
+					}
+
+					$statusMsg = $statusMsg . "Array $raidArray drive in bay $driveBay has status $driveStatus.";
+				}
+			}
+
+			@output = `sudo $self->{_path} controller slot=$controllerId logicaldrive all show`;
+			foreach (@output) {
+				my $line = $self->SUPER::trim($_);
+				if ($line =~ /^$/) {
+					next;
+				}
+				if ($line =~ /^array (.*)/) {
+					$raidArray = $1;
+					next;
+				}
+				if ($line =~ /logicaldrive (\d+) (.*)/) {
+					$ldId     = $1;
+					$ldStatus = $2;
+					if ($ldStatus =~ /Transforming,(.*)/) {
+						if ($status eq 0) {
+							$status = 1;
+						}
+						$statusMsg = $statusMsg . "Array $raidArray logical drive $ldId has status $ldStatus.";
+					}
+				}
+			}
+		}
+
         return ($status, $statusMsg);
     };
 
@@ -113,6 +169,11 @@ package dell;
         # First we need the controller id.
         #
         my @output = `$self->{_path} storage controller`;
+
+		if ( $? ne 0 ) {
+			return (3, "Unable to run command ".$self->{_path}." to get controller information: ".$!);
+		}
+
         my $controllerId = -1;
         foreach (@output) {
             my $line = $self->SUPER::trim($_);
@@ -132,15 +193,19 @@ package dell;
         # the output is in this order:
         # so once we hit 'State' we can break out of the output.
         #
+		# Note: Progress : $arrayProgress may or may not be there
+		# depending on the state of the vdisk.
+		#
         # Controller PERC a/b Integrated (Embedded)
         # ID                        : X
         # Status                    : $arrayStatus
         # Name                      : $arrayName
         # State                     : $arrayState
+        # Progress                  : $arrayProgress
         #
         my $cmd = "$self->{_path} storage vdisk controller=$controllerId";
         @output = `$cmd`;
-        my ($arrayStatus, $arrayName, $arrayState);
+        my ($arrayStatus, $arrayName, $arrayState, $arrayProgress);
         foreach (@output) {
             my $line = $self->SUPER::trim($_);
 
@@ -156,12 +221,26 @@ package dell;
 
             if ($line =~ /^State\s+:\s+(.*)/) {
                 $arrayState = lc($1);
+                next;
+            }
+
+            if ($line =~ /^Progress\s+:\s+(.*)/) {
+                $arrayProgress = $1;
+                next;
             }
         }
 
         # if it's status is 'Ok' then we don't need to check
         # specific disks, the array is fine.
-        if ($arrayState =~ /ok/) {
+        if ($arrayState =~ /ready/ && $arrayStatus =~ /ok/) {
+            return ($status, $statusMsg);
+        }
+
+        # See http://support.dell.com/support/edocs/storage/p62517/en/chapterb.htm
+        # for what background initialization means.
+        if ($arrayState =~ /background initialization/) {
+            $status = 1;
+            $statusMsg = "Rebuilding the array in the background. Up to $arrayProgress";
             return ($status, $statusMsg);
         }
 
@@ -215,6 +294,7 @@ package dell;
                 $statusMsg =~ s/~progress~/$diskProgress/;
             }
         }
+
         return ($status, $statusMsg);
     };
 
@@ -265,6 +345,10 @@ package mdstat;
             $statusInfo{$device} = $statusInfo{$device}.$line.".";
         }
         close MDSTAT;
+
+	if (!scalar %devices) {
+		return (3, "No software raid devices found. Does this server have hardware raid but no tools installed?");
+	}
 
         DEVICE: foreach my $raidArray (sort keys %devices) {
             $statuses{$raidArray} =~ /(raid\d+)\s/;
@@ -477,4 +561,3 @@ package main;
     }
     print $statusMsg;
     exit $status;
-
