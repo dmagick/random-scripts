@@ -6,8 +6,6 @@
 #
 # Requires access to postgresql as the postgres user (runs `psql -U postgres` commands)
 # and generates a new config (does not touch the original config at all).
-#
-# $Id: postgresql_tuner.pl 5715 2011-02-01 22:36:15Z dschoen $
 
 use strict;
 use Data::Dumper;
@@ -699,9 +697,10 @@ if (compare($pgconfig, 'postgresql_new.conf') != 0) {
 	print "Your configuration has been tuned already, there are no suggested changes.\n\n";
 }
 
+my $pagesize = `getconf PAGE_SIZE`;
 print "You should set shmmax and shmall in /etc/sysctl.conf to the following:\n";
 print "kernel.shmmax=", ceil($memory + 1024), "\n"; # set it *slightly* higher rather than exactly.
-print "kernel.shmall=", ceil($memory/8), "\n";
+print "kernel.shmall=", ceil($memory/$pagesize), "\n";
 print "Note: shmmax and shmall do not need to be changed if they are already at the suggested values or higher.\n";
 
 print "\n";
