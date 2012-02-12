@@ -1,0 +1,11 @@
+set number
+set expandtab
+set shiftwidth=4
+set tabstop=4
+set modeline
+
+call pathogen#infect()
+syntax on
+filetype plugin indent on
+
+nmap <F5> :TagbarToggle<CR>
