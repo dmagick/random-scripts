@@ -1,11 +1,23 @@
+set modeline
 set number
 set expandtab
 set shiftwidth=4
 set tabstop=4
-set modeline
-
-call pathogen#infect()
+set cindent
+set autoindent
+set incsearch
+set hlsearch
+set nu
+set scs
+set mouse=nv
+set background=dark
+colo elflord
+set backspace=indent,eol,start
+set dictionary=/usr/share/myspell/dicts/en_US.dic
 syntax on
 filetype plugin indent on
 
+call pathogen#infect()
+
 nmap <F5> :TagbarToggle<CR>
+
